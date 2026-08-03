@@ -282,6 +282,66 @@ FilterPropagateResult NumericStats::CheckZonemap(const BaseStatistics &stats, Ex
 	}
 }
 
+template <class T>
+bool ConstantsCoverRangeTemplated(const BaseStatistics &stats, array_ptr<const Value> constants) {
+	T min_value = NumericStats::GetMinUnsafe<T>(stats);
+	T max_value = NumericStats::GetMaxUnsafe<T>(stats);
+	vector<T> values;
+	for (auto &constant_value : constants) {
+		T constant = constant_value.GetValueUnsafe<T>();
+		if (GreaterThanEquals::Operation(constant, min_value) && LessThanEquals::Operation(constant, max_value)) {
+			values.push_back(constant);
+		}
+	}
+	std::sort(values.begin(), values.end());
+	values.erase(std::unique(values.begin(), values.end()), values.end());
+	if (values.empty() || values[0] != min_value || values.back() != max_value) {
+		return false;
+	}
+	// values are sorted and distinct, so a predecessor is never the maximum of T and cannot overflow
+	for (idx_t i = 1; i < values.size(); i++) {
+		if (values[i - 1] + 1 != values[i]) {
+			return false;
+		}
+	}
+	return true;
+}
+
+bool NumericStats::ConstantsCoverRange(const BaseStatistics &stats, array_ptr<const Value> constants) {
+	if (!stats.GetType().IsIntegral() || !NumericStats::HasMinMax(stats)) {
+		return false;
+	}
+	for (auto &constant_value : constants) {
+		if (constant_value.IsNull() || constant_value.type() != stats.GetType()) {
+			return false;
+		}
+	}
+	switch (stats.GetType().InternalType()) {
+	case PhysicalType::INT8:
+		return ConstantsCoverRangeTemplated<int8_t>(stats, constants);
+	case PhysicalType::INT16:
+		return ConstantsCoverRangeTemplated<int16_t>(stats, constants);
+	case PhysicalType::INT32:
+		return ConstantsCoverRangeTemplated<int32_t>(stats, constants);
+	case PhysicalType::INT64:
+		return ConstantsCoverRangeTemplated<int64_t>(stats, constants);
+	case PhysicalType::UINT8:
+		return ConstantsCoverRangeTemplated<uint8_t>(stats, constants);
+	case PhysicalType::UINT16:
+		return ConstantsCoverRangeTemplated<uint16_t>(stats, constants);
+	case PhysicalType::UINT32:
+		return ConstantsCoverRangeTemplated<uint32_t>(stats, constants);
+	case PhysicalType::UINT64:
+		return ConstantsCoverRangeTemplated<uint64_t>(stats, constants);
+	case PhysicalType::INT128:
+		return ConstantsCoverRangeTemplated<hugeint_t>(stats, constants);
+	case PhysicalType::UINT128:
+		return ConstantsCoverRangeTemplated<uhugeint_t>(stats, constants);
+	default:
+		return false;
+	}
+}
+
 bool NumericStats::IsConstant(const BaseStatistics &stats) {
 	return NumericStats::Max(stats) <= NumericStats::Min(stats);
 }

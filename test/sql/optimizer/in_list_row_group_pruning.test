@@ -1,0 +1,130 @@
+# name: test/sql/optimizer/in_list_row_group_pruning.test
+# description: Prune row groups for NOT IN when the IN-list covers the whole zonemap range
+# group: [optimizer]
+
+statement ok
+ATTACH '{TEST_DIR}/in_list_prune.duckdb' AS db (ROW_GROUP_SIZE 2048);
+
+statement ok
+USE db;
+
+# every row group holds only 1, 2 or 3, so the IN-list covers the [1, 3] zonemap
+statement ok
+CREATE TABLE covered AS SELECT (range % 3 + 1)::INTEGER AS i FROM range(6144);
+
+query I
+SELECT count(*) FROM covered WHERE i NOT IN (1, 2, 3);
+----
+0
+
+query II
+EXPLAIN ANALYZE SELECT count(*) FROM covered WHERE i NOT IN (1, 2, 3);
+----
+analyzed_plan	<REGEX>:.*Empty Result.*
+
+# the positive direction keeps matching every row
+query I
+SELECT count(*) FROM covered WHERE i IN (1, 2, 3);
+----
+6144
+
+# a constant column only needs NOT to invert an always-true child
+statement ok
+CREATE TABLE constant AS SELECT 1::INTEGER AS i FROM range(6144);
+
+query I
+SELECT count(*) FROM constant WHERE i NOT IN (1);
+----
+0
+
+query II
+EXPLAIN ANALYZE SELECT count(*) FROM constant WHERE i NOT IN (1);
+----
+analyzed_plan	<REGEX>:.*Empty Result.*
+
+# global stats are [1, 5] and cannot prune, but the first row group holds only {1, 2, 3}
+statement ok
+CREATE TABLE mixed AS
+    SELECT CASE WHEN range < 2048 THEN (range % 3 + 1) ELSE (range % 2 + 4) END::INTEGER AS i
+    FROM range(6144);
+
+query I
+SELECT count(*) FROM mixed WHERE i NOT IN (1, 2, 3);
+----
+4096
+
+query II
+EXPLAIN ANALYZE SELECT count(*) FROM mixed WHERE i NOT IN (1, 2, 3);
+----
+analyzed_plan	<REGEX>:.*Row Groups Scanned: 2 / 3.*
+
+# 4 extends the covered range of the first row group, but leaves 5 in the other two
+query I
+SELECT count(*) FROM mixed WHERE i NOT IN (1, 2, 3, 4);
+----
+2048
+
+query II
+EXPLAIN ANALYZE SELECT count(*) FROM mixed WHERE i NOT IN (1, 2, 3, 4);
+----
+analyzed_plan	<REGEX>:.*Row Groups Scanned: 2 / 3.*
+
+# a list that stops short of the maximum covers nothing
+query I
+SELECT count(*) FROM mixed WHERE i NOT IN (1, 2);
+----
+4778
+
+# non-integral types hold values between the listed constants, so the range is never covered
+statement ok
+CREATE TABLE doubles AS
+    SELECT CASE WHEN range = 5 THEN 1.5 ELSE (range % 3 + 1) END::DOUBLE AS i FROM range(6144);
+
+query I
+SELECT count(*) FROM doubles WHERE i NOT IN (1, 2, 3);
+----
+1
+
+query II
+EXPLAIN ANALYZE SELECT count(*) FROM doubles WHERE i NOT IN (1, 2, 3);
+----
+analyzed_plan	<REGEX>:.*Row Groups Scanned: 3 / 3.*
+
+# NOT IN does not match NULL, so a nullable covered column still yields no rows
+statement ok
+CREATE TABLE nullable AS
+    SELECT CASE WHEN range % 2048 = 0 THEN NULL ELSE (range % 3 + 1)::INTEGER END AS i
+    FROM range(6144);
+
+query I
+SELECT count(*) FROM nullable WHERE i NOT IN (1, 2, 3);
+----
+0
+
+# unsigned and 128-bit integers use the same range-coverage reasoning
+statement ok
+CREATE TABLE wide AS SELECT (range % 3 + 1)::UBIGINT AS u, (range % 3 + 1)::HUGEINT AS h FROM range(6144);
+
+query I
+SELECT count(*) FROM wide WHERE u NOT IN (1, 2, 3);
+----
+0
+
+query I
+SELECT count(*) FROM wide WHERE h NOT IN (1, 2, 3);
+----
+0
+
+# a boundary list on the extremes of the type must not overflow while checking adjacency
+statement ok
+CREATE TABLE extremes AS SELECT CASE WHEN range % 2 = 0 THEN -128 ELSE 127 END::TINYINT AS i FROM range(6144);
+
+query I
+SELECT count(*) FROM extremes WHERE i NOT IN (-128, 127);
+----
+0
+
+query II
+EXPLAIN ANALYZE SELECT count(*) FROM extremes WHERE i NOT IN (-128, 127);
+----
+analyzed_plan	<REGEX>:.*Row Groups Scanned: 3 / 3.*
