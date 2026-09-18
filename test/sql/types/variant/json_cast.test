@@ -192,3 +192,23 @@ select {'var': a::JSON}::VARIANT from base;
 {'var': NULL}
 {'var': {'b': [1, 2, true, hello], 'a': NULL}}
 {'var': true}
+
+# Issue #25873: SQL NULL VARIANT must become SQL NULL JSON, not the JSON literal null
+query IIIII
+SELECT v IS NULL, (v::JSON) IS NULL, v::JSON, (to_json(v) IS NULL), to_json(v)
+FROM (VALUES (NULL::VARIANT), ((42)::VARIANT)) t(v);
+----
+true	true	NULL	true	NULL
+false	false	42	false	42
+
+query I
+SELECT count(v::JSON)
+FROM (VALUES (NULL::VARIANT), ((42)::VARIANT)) t(v);
+----
+1
+
+query I
+SELECT count(to_json(v))
+FROM (VALUES (NULL::VARIANT), ((42)::VARIANT)) t(v);
+----
+1

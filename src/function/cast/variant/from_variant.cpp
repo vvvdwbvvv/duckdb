@@ -514,14 +514,20 @@ static bool ConvertVariantToTuple(FromVariantConversionData &conversion_data, Ve
 static bool CastVariantToJSON(FromVariantConversionData &conversion_data, Vector &result, const SelectionVector &sel,
                               idx_t offset, idx_t count, optional_idx row) {
 	auto &error = conversion_data.error;
+	auto &variant = conversion_data.variant;
 
 	ConvertedJSONHolder holder(Allocator::DefaultAllocator());
 
 	auto result_data = FlatVector::Writer<string_t>(result, count, offset);
 	for (idx_t i = 0; i < count; i++) {
 		const auto row_index = row.IsValid() ? row.GetIndex() : i;
+		// SQL NULL VARIANT row → SQL NULL JSON (not the JSON literal null)
+		if (!variant.RowIsValid(row_index)) {
+			result_data.WriteNull();
+			continue;
+		}
 		const auto json_val =
-		    VariantCasts::ConvertVariantToJSON(holder.GetDocument(), conversion_data.variant, row_index, sel[i]);
+		    VariantCasts::ConvertVariantToJSON(holder.GetDocument(), variant, row_index, sel[i]);
 		if (!json_val) {
 			error = StringUtil::Format("Failed to convert to JSON object");
 			// same as the list path: a TRY_CAST returns false instead of throwing, so the writer must be
