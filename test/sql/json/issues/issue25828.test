@@ -1,0 +1,30 @@
+# name: test/sql/json/issues/issue25828.test
+# description: Test issue 25828 - mixed BIGINT+DOUBLE must not become MAP(VARCHAR, DOUBLE) at map_inference_threshold
+# group: [issues]
+
+require json
+
+statement ok
+CREATE OR REPLACE MACRO make(n) AS TABLE
+  SELECT '{"o":{' || (SELECT string_agg('"k' || printf('%03d', x) || '":' ||
+           CASE WHEN x = 0 THEN '1.5' ELSE '9007199254740993' END, ',' ORDER BY x)
+         FROM generate_series(0, n - 1) t(x)) || '}}' AS l
+  FROM range(3);
+
+statement ok
+COPY (FROM make(199)) TO '{TEST_DIR}/k199.ndjson' (FORMAT csv, QUOTE '', HEADER 0)
+
+statement ok
+COPY (FROM make(200)) TO '{TEST_DIR}/k200.ndjson' (FORMAT csv, QUOTE '', HEADER 0)
+
+query II
+SELECT typeof(o) LIKE 'STRUCT%', o['k001']::DECIMAL(38,0)::VARCHAR
+FROM read_json('{TEST_DIR}/k199.ndjson') LIMIT 1
+----
+true	9007199254740993
+
+query III
+SELECT typeof(o) LIKE 'STRUCT%', typeof(o) LIKE 'MAP(VARCHAR, DOUBLE)%', o['k001']::DECIMAL(38,0)::VARCHAR
+FROM read_json('{TEST_DIR}/k200.ndjson') LIMIT 1
+----
+true	false	9007199254740993
