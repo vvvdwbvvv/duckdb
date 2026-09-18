@@ -213,12 +213,35 @@ bool AreCommentsAcceptable(const ColumnCountResult &result, idx_t num_cols, cons
 	return valid_comments / detected_comments >= min_majority;
 }
 
+// Rows skipped as dirty notes are a preamble only if they do not already form a consistent file.
+bool PrefixColumnsAreConsistent(const ColumnCountResult &result, idx_t prefix_row_count) {
+	if (prefix_row_count == 0 || prefix_row_count > result.result_position) {
+		return false;
+	}
+	idx_t expected_cols = 0;
+	idx_t counted = 0;
+	for (idx_t i = 0; i < prefix_row_count; i++) {
+		const auto &row = result.column_counts[i];
+		if (row.is_comment) {
+			continue;
+		}
+		if (counted == 0) {
+			expected_cols = row.number_of_columns;
+		} else if (row.number_of_columns != expected_cols) {
+			return false;
+		}
+		counted++;
+	}
+	return counted >= 2;
+}
+
 void CSVSniffer::AnalyzeDialectCandidate(unique_ptr<ColumnCountScanner> scanner, CandidateStats &stats,
                                          vector<unique_ptr<ColumnCountScanner>> &successful_candidates) {
 	// The sniffed_column_counts variable keeps track of the number of columns found for each row
 	auto &sniffed_column_counts = scanner->ParseChunk();
 	idx_t dirty_notes = 0;
 	idx_t dirty_notes_minus_comments = 0;
+	idx_t dirty_notes_row = 0;
 	idx_t empty_lines = 0;
 	if (sniffed_column_counts.error) {
 		if (!scanner->error_handler->HasError(MAXIMUM_LINE_SIZE)) {
@@ -285,6 +308,7 @@ void CSVSniffer::AnalyzeDialectCandidate(unique_ptr<ColumnCountScanner> scanner,
 			dirty_notes = row + sniffed_column_counts[row].empty_lines;
 			empty_lines = sniffed_column_counts[row].empty_lines;
 			dirty_notes_minus_comments = dirty_notes - comment_rows;
+			dirty_notes_row = row;
 			header_idx = row;
 			consistent_rows = 1;
 		} else if (sniffed_column_counts[row].number_of_columns == num_cols || (use_most_frequent_columns)) {
@@ -294,6 +318,7 @@ void CSVSniffer::AnalyzeDialectCandidate(unique_ptr<ColumnCountScanner> scanner,
 				dirty_notes = row + sniffed_column_counts[row].empty_lines;
 				empty_lines = sniffed_column_counts[row].empty_lines;
 				dirty_notes_minus_comments = dirty_notes - comment_rows;
+				dirty_notes_row = row;
 				num_cols = sniffed_column_counts[row].number_of_columns;
 			}
 			if (sniffed_column_counts[row].number_of_columns != num_cols) {
@@ -401,6 +426,9 @@ void CSVSniffer::AnalyzeDialectCandidate(unique_ptr<ColumnCountScanner> scanner,
 						}
 						sniffing_state_machine.dialect_options.skip_rows = options.dialect_options.skip_rows.GetValue();
 					} else if (!options.null_padding) {
+						if (dirty_notes > 0 && PrefixColumnsAreConsistent(sniffed_column_counts, dirty_notes_row)) {
+							return;
+						}
 						sniffing_state_machine.dialect_options.skip_rows = dirty_notes;
 					}
 					sniffing_state_machine.dialect_options.num_cols = num_cols;
@@ -437,6 +465,11 @@ void CSVSniffer::AnalyzeDialectCandidate(unique_ptr<ColumnCountScanner> scanner,
 				}
 			}
 		}
+		// Reject before updating max_columns_found. Returning later at skip_rows would keep a stale winner.
+		if (!options.null_padding && !options.dialect_options.skip_rows.IsSetByUser() && dirty_notes > 0 &&
+		    PrefixColumnsAreConsistent(sniffed_column_counts, dirty_notes_row)) {
+			return;
+		}
 		stats.best_consistent_rows = consistent_rows;
 		max_columns_found = num_cols;
 		stats.prev_padding_count = padding_count;
@@ -451,6 +484,9 @@ void CSVSniffer::AnalyzeDialectCandidate(unique_ptr<ColumnCountScanner> scanner,
 			}
 			sniffing_state_machine.dialect_options.skip_rows = options.dialect_options.skip_rows.GetValue();
 		} else if (!options.null_padding) {
+			if (dirty_notes > 0 && PrefixColumnsAreConsistent(sniffed_column_counts, dirty_notes_row)) {
+				return;
+			}
 			sniffing_state_machine.dialect_options.skip_rows = dirty_notes_minus_comments;
 		}
 		successful_candidates.clear();
@@ -474,6 +510,9 @@ void CSVSniffer::AnalyzeDialectCandidate(unique_ptr<ColumnCountScanner> scanner,
 			}
 			sniffing_state_machine.dialect_options.skip_rows = options.dialect_options.skip_rows.GetValue();
 		} else if (!options.null_padding) {
+			if (dirty_notes > 0 && PrefixColumnsAreConsistent(sniffed_column_counts, dirty_notes_row)) {
+				return;
+			}
 			sniffing_state_machine.dialect_options.skip_rows = dirty_notes;
 		}
 		sniffing_state_machine.dialect_options.num_cols = num_cols;
