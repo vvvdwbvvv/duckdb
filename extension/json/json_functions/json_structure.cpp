@@ -844,9 +844,7 @@ static double CalculateTypeSimilarity(const LogicalType &merged, const LogicalTy
 		return CalculateTypeSimilarity(merged_child_type, type_child_type, max_depth, depth + 1);
 	}
 	default:
-		// This is only reachable if type has been inferred using candidate_types, but candidate_types were not
-		// consistent among all map values
-		return 1;
+		return -1;
 	}
 }
 

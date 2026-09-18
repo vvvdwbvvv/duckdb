@@ -294,11 +294,11 @@ SELECT distinct typeof(a) FROM read_json_auto('{DATA_DIR}/json/map_of_dates.json
 ----
 MAP(VARCHAR, DATE)
 
-# Mixed candidate types are also handled
+# Mixed candidate types refuse MAP and keep STRUCT
 query I
 SELECT distinct typeof(a) FROM read_json_auto('{DATA_DIR}/json/map_of_mixed_date_timestamps.jsonl', map_inference_threshold=25)
 ----
-MAP(VARCHAR, VARCHAR)
+STRUCT("1" "NULL", "2" DATE, "3" TIMESTAMP WITH TIME ZONE, "4" DATE, "5" DATE, "6" DATE, "7" DATE, "8" DATE, "9" "NULL", "10" DATE, "11" DATE, "12" DATE, "13" TIMESTAMP WITH TIME ZONE, "14" DATE, "15" DATE, "16" DATE, "17" DATE, "18" TIMESTAMP WITH TIME ZONE, "19" TIMESTAMP WITH TIME ZONE, "20" DATE, "21" DATE, "22" DATE, "23" DATE, "24" DATE, "25" TIMESTAMP WITH TIME ZONE)
 
 # Incompatible types are handled correctly
 query T
