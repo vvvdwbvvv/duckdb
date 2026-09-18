@@ -1,0 +1,86 @@
+# name: test/sql/copy/csv/25827.test
+# description: Do not infer skip_rows when a later delimiter match would drop a consistent prefix
+# group: [csv]
+
+# Three-line file from duckdb/duckdb#25827. The last line contains ';' but the
+# first two rows are a well-formed one-column file. Defaults must not skip them.
+statement ok
+COPY (SELECT l FROM (VALUES (1, 'c0'), (2, 'v0'), (3, 'a;b')) t(i, l) ORDER BY i)
+    TO '{TEST_DIR}/three.csv' (FORMAT CSV, QUOTE '', HEADER 0);
+
+query I
+SELECT count(*) FROM read_csv('{TEST_DIR}/three.csv');
+----
+2
+
+query I
+SELECT list(column_name) FROM (DESCRIBE SELECT * FROM read_csv('{TEST_DIR}/three.csv'));
+----
+[c0]
+
+query I
+SELECT SkipRows FROM sniff_csv('{TEST_DIR}/three.csv');
+----
+0
+
+# Writer round-trip: a semicolon in the last value is not a delimiter change
+statement ok
+CREATE TABLE t25827 (c0 VARCHAR);
+
+statement ok
+INSERT INTO t25827 VALUES ('a'), ('b'), ('x;y');
+
+statement ok
+COPY t25827 TO '{TEST_DIR}/rt.csv' (FORMAT CSV);
+
+query I
+SELECT c0 FROM read_csv('{TEST_DIR}/rt.csv') ORDER BY 1;
+----
+a
+b
+x;y
+
+# Width grows after a consistent two-column prefix. Defaults must not drop that prefix.
+statement ok
+COPY (
+SELECT l FROM (
+SELECT 0 AS i, 'c0,c1' AS l
+UNION ALL
+SELECT i + 1, CASE WHEN i < 1000 THEN printf('%d,%d', i * 10, i * 10 + 1)
+                   ELSE printf('%d,%d,%d', i * 10, i * 10 + 1, i * 10 + 2) END
+FROM range(30000) t(i)
+) ORDER BY i
+) TO '{TEST_DIR}/wide.csv' (FORMAT CSV, QUOTE '', HEADER 0);
+
+query I
+SELECT count(*) FROM read_csv('{TEST_DIR}/wide.csv');
+----
+30000
+
+query I
+SELECT SkipRows FROM sniff_csv('{TEST_DIR}/wide.csv');
+----
+0
+
+# Real preambles still skip junk notes
+query IIIII
+FROM '{DATA_DIR}/csv/inconsistent_cells.csv'
+----
+1	2	3	4	5
+1	2	3	4	5
+
+query III
+SELECT * FROM read_csv_auto('{DATA_DIR}/csv/dirty_line.csv', skip = 1)
+----
+1.5	a	3
+2.5	b	4
+
+query RTT
+SELECT number, text, date FROM read_csv_auto('{DATA_DIR}/csv/auto/skip_row.csv');
+----
+345.000000	TEST3	2000-12-13
+
+query RTT
+SELECT number, text, date FROM read_csv_auto('{DATA_DIR}/csv/auto/multiple_skip_row.csv');
+----
+345.000000	TEST4	2000-12-13
